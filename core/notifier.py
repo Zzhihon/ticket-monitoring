@@ -1,5 +1,5 @@
 """消息推送：钉钉群机器人（加签） / Server酱（sct.ftqq.com）/ SMTP 邮件
-（163/QQ 免费邮箱授权码）/ Windows 系统弹窗"""
+（163/QQ 免费邮箱授权码）/ Telegram Bot / Windows 系统弹窗"""
 import base64
 import hashlib
 import hmac
@@ -1660,6 +1660,137 @@ class AliyunAlertNotifier:
             return False
 
 
+_TG_MD_LINK = _re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+)\)")
+_TG_NOTE = "（已截断，完整明细见控制台）"
+
+
+def _tg_inline(s: str) -> str:
+    """单行 markdown → Telegram HTML 子集：先转义后注标签（_esc_md
+    同律）；链接/图片只留公网可点的（launch_is_public 过滤回环死链），
+    其余剥壳留文字；**粗体** 转 <b>。"""
+    out, pos = [], 0
+    for m in _TG_MD_LINK.finditer(s):
+        out.append(_esc_md(s[pos:m.start()]))
+        is_img, text, url = m.group(1), m.group(2), m.group(3)
+        text = text or ("图" if is_img else url)
+        if is_img:
+            text = "🖼 " + text
+        if url.startswith(("http://", "https://")) and launch_is_public(url):
+            out.append('<a href="%s">%s</a>' % (_esc_md(url), _esc_md(text)))
+        elif not is_img:
+            out.append(_esc_md(text))
+        pos = m.end()
+    out.append(_esc_md(s[pos:]))
+    return _re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", "".join(out))
+
+
+def _tg_html(title: str, desp: str, launch: str = "",
+             limit: int = 3900) -> str:
+    """整条消息渲染：标题加粗 + 逐行转写（#### 标题→粗体、> 引用
+    前缀剥除、连续空行压成一行）。按整行截断：HTML 长度恒 ≥ 可见
+    长度，预算 3900 落在 Telegram 4096 可见字符上限内，且标签不会
+    被腰斩；截断时留尾注（钉钉/ntfy/Bark 同族纪律）。"""
+    head = "<b>%s</b>" % _esc_md(title or "机票监控")
+    tail = ('\n<a href="%s">打开详情</a>' % _esc_md(launch)
+            if launch and launch_is_public(launch) else "")
+    budget = limit - len(head) - len(tail) - len(_TG_NOTE) - 1
+    lines, used, cut, blank = [], 0, False, False
+    for raw in (desp or "").split("\n"):
+        ln = _re.sub(r"^(\s*>)+\s?", "", raw.rstrip())
+        hm = _re.match(r"^\s*#{1,6}\s*(.*)$", ln)
+        ln = ("<b>%s</b>" % _tg_inline(hm.group(1)) if hm
+              else _tg_inline(ln))
+        if not ln.strip():
+            if blank or not lines:
+                continue
+            blank = True
+        else:
+            blank = False
+        if used + len(ln) + 1 > budget:
+            cut = True
+            break
+        lines.append(ln)
+        used += len(ln) + 1
+    body = "\n".join(lines).strip()
+    return (head + ("\n" + body if body else "")
+            + ("\n" + _TG_NOTE if cut else "") + tail)
+
+
+class TelegramNotifier(_HeartbeatBackoff):
+    """Telegram Bot 通道（群/频道/私聊均可）：与钉钉/邮件并联，心跳、
+    日报、达标都推。sendMessage + parse_mode=HTML；chat_id 群为负数
+    （-100 开头），开了话题的群可填 message_thread_id 投到指定话题。
+    国内网络直连 api.telegram.org 不通：proxy 填 http:// 或 socks5://
+    代理（socks 需装 socksio），或 api_base 指向自建 Bot API 中转。
+    HTML 解析被拒（400 can't parse entities）时降级纯文本补发一次——
+    首发未送达，补发不会重复。"""
+
+    def __init__(self, bot_token: str, chat_id, logger: logging.Logger,
+                 proxy: str = "", api_base: str = "https://api.telegram.org",
+                 message_thread_id=None):
+        self.bot_token = str(bot_token or "").strip()
+        self.chat_id = str(chat_id or "").strip()
+        self.proxy = str(proxy or "").strip() or None
+        self.api_base = (str(api_base or "").strip()
+                         or "https://api.telegram.org").rstrip("/")
+        self.thread_id = message_thread_id
+        self.logger = logger
+        self._fail_streak = 0
+        self.last_err = ""
+
+    def _post(self, payload: dict):
+        # trust_env=False 直连律（图床/钉钉/ntfy 同族）：代理只认显式 proxy
+        return httpx.post(
+            "%s/bot%s/sendMessage" % (self.api_base, self.bot_token),
+            json=payload, timeout=15, trust_env=False, proxy=self.proxy)
+
+    def send(self, title: str, desp: str = "", at_mobiles: list = None,
+             is_at_all: bool = False, launch: str = "") -> bool:
+        if not (self.bot_token and self.chat_id):
+            return False
+        payload = {"chat_id": self.chat_id,
+                   "text": _tg_html(title, desp, launch),
+                   "parse_mode": "HTML",
+                   "disable_web_page_preview": True}
+        if self.thread_id:
+            payload["message_thread_id"] = int(self.thread_id)
+        try:
+            r = self._post(payload)
+            if r.status_code == 400 and "parse" in (r.text or "").lower():
+                payload.pop("parse_mode")
+                payload["text"] = _re.sub(r"<[^>]+>", "", payload["text"]) \
+                    .replace("&lt;", "<").replace("&gt;", ">") \
+                    .replace("&quot;", '"').replace("&amp;", "&")
+                r = self._post(payload)
+            ok = r.status_code == 200 and bool((r.json() or {}).get("ok"))
+            self.last_err = "" if ok else "HTTP %s %s" % (
+                r.status_code, (r.text or "")[:160])
+        except Exception as e:
+            ok, self.last_err = False, str(e)[:160]
+        self._fail_streak = 0 if ok else self._fail_streak + 1
+        _append_push_history(title, desp, ok, ch="telegram")
+        if ok:
+            self.logger.info("[Telegram] 已推送: %s", (title or "")[:50])
+        else:
+            # last_err 不含 token（URL 只进请求行，不进异常/回执文本）
+            self.logger.warning("[Telegram] 推送失败(第%d次): %s",
+                                self._fail_streak, self.last_err)
+        return ok
+
+
+def _build_telegram(cfg: dict, logger: logging.Logger):
+    tg = cfg.get("telegram")
+    if not (isinstance(tg, dict) and tg.get("enabled")
+            and str(tg.get("bot_token") or "").strip()
+            and str(tg.get("chat_id") or "").strip()):
+        return None
+    return TelegramNotifier(
+        bot_token=tg["bot_token"], chat_id=tg["chat_id"], logger=logger,
+        proxy=tg.get("proxy") or "",
+        api_base=tg.get("api_base") or "https://api.telegram.org",
+        message_thread_id=tg.get("message_thread_id"))
+
+
 def build_notifier(cfg: dict, logger: logging.Logger,
                    base_url: str = ""):
     """根据 notifier 配置块构造推送器；未配置则返回 None。钉钉优先、
@@ -1719,9 +1850,10 @@ def build_notifier(cfg: dict, logger: logging.Logger,
             to=to_s,
             logger=logger,
             snapshot_base=(base_url or "").strip()))
-    if primary and email_ns:
-        return CompositeNotifier([primary] + email_ns, logger)
-    if email_ns:
-        return email_ns[0] if len(email_ns) == 1 else (
-            CompositeNotifier(email_ns, logger))
-    return primary
+    # 并联成员：主通道（钉钉/Server酱单选）+ 邮件们 + Telegram
+    tg = _build_telegram(cfg, logger)
+    members = ([primary] if primary else []) + email_ns + ([tg] if tg else [])
+    if not members:
+        return None
+    return members[0] if len(members) == 1 else (
+        CompositeNotifier(members, logger))

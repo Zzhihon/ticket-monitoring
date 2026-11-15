@@ -108,6 +108,14 @@ users:
     #     user: ''
     #     password: ''
     #     to: ''
+    telegram:                # Telegram Bot（与钉钉/邮件并联：心跳、日报、达标都推）
+      enabled: false         # @BotFather 建 bot 拿 token，拉进群后填群 chat_id
+      bot_token: ''          # 123456:ABC-...
+      chat_id: ''            # 群为 -100 开头的负数；私聊填自己的数字 id
+      # message_thread_id: 0 # 开了话题的群：投到指定话题
+      # commands: false      # true=群里可用 /price /watch /unwatch /routes /scan（改后重启生效）
+      # proxy: ''            # 国内直连不通时填 http://… 或 socks5://127.0.0.1:1080（socks 需 socksio）
+      # api_base: https://api.telegram.org   # 或自建 Bot API 中转地址
     ntfy:
       enabled: false         # ntfy.sh 强提醒（达标专用，手机装 ntfy App）
       topic: ''              # 订阅主题名（相当于密码，勿用常见词）
