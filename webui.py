@@ -27272,14 +27272,17 @@ function buildForm(){if(!CFG)return;let h='',gh='';
   const _emList=ems(i);
   const _chOK={
    dingtalk:_chReady('dingtalk',u),ntfy:_chReady('ntfy',u),bark:_chReady('bark',u),
+   telegram:_chReady('telegram',u),
    aliyun:_chReady('aliyun',u),serverchan:_chReady('serverchan',u),
    email:_emList.map(em=>_chReady('email',u,em)),
    imghost:_chReady('imghost',u)};
   const _pushOn=!!(dt.enabled||((u.notifier||{}).ntfy||{}).enabled
    ||((u.notifier||{}).bark||{}).enabled||((u.notifier||{}).aliyun||{}).enabled
+   ||((u.notifier||{}).telegram||{}).enabled
    ||((u.notifier||{}).serverchan||{}).enabled||_emList.some(e=>e.enabled));
   const _pushReady=!!(dt.enabled&&_chOK.dingtalk)||!!((u.notifier||{}).ntfy||{}).enabled&&_chOK.ntfy
    ||!!((u.notifier||{}).bark||{}).enabled&&_chOK.bark
+   ||!!((u.notifier||{}).telegram||{}).enabled&&_chOK.telegram
    ||!!((u.notifier||{}).aliyun||{}).enabled&&_chOK.aliyun
    ||!!((u.notifier||{}).serverchan||{}).enabled&&_chOK.serverchan
    ||_chOK.email.some(Boolean);
@@ -27443,6 +27446,7 @@ function buildForm(){if(!CFG)return;let h='',gh='';
       _chOK.dingtalk?'钉钉✓':(dt.enabled?'钉钉待完善':'钉钉×'),
       ((u.notifier||{}).ntfy||{}).enabled?(_chOK.ntfy?'ntfy✓':'ntfy待完善'):null,
       ((u.notifier||{}).bark||{}).enabled?(_chOK.bark?'Bark✓':'Bark待完善'):null,
+      ((u.notifier||{}).telegram||{}).enabled?(_chOK.telegram?'Telegram✓':'Telegram待完善'):null,
       ((u.notifier||{}).aliyun||{}).enabled?(_chOK.aliyun?'电话✓':'电话待完善'):null,
       ((u.notifier||{}).serverchan||{}).enabled?(_chOK.serverchan?'微信✓':'微信待完善'):null,
       (_emList.filter(e=>e.enabled).length
@@ -27468,6 +27472,13 @@ function buildForm(){if(!CFG)return;let h='',gh='';
     <div class="srow"><div class="slab"><b>服务器（可选）</b><div class="shint">自托管 Bark Server 填这里；留空=官方 api.day.app</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="https://api.day.app" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).bark||{}).server||'')}" onchange="setBark(${i},'server',this.value)"></div></div>
     <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实推一条到 iPhone，验证 Key 与服务器可用</div></div><div class="sctl"><button class="btn2" onclick="testBark(${i},this)">测试 Bark（用表单当前值）</button></div></div>
     <div class="hint"><a href="https://github.com/finb/bark" target="_blank" rel="noopener" style="color:var(--blue)">finb/bark</a> 开源免费 iOS 推送：App 内复制 Key 填入即用，达标即铃声弹窗。</div></div>
+   <div class="chcard${_chOK.telegram?' on':(((u.notifier||{}).telegram||{}).enabled?' todo':'')}" data-ch="telegram"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.telegram?' on':(((u.notifier||{}).telegram||{}).enabled?' mid':'')}"></span>Telegram 群<span class="muted">${_chLbl(!!((u.notifier||{}).telegram||{}).enabled,_chOK.telegram)}</span><span class="chev open">▾</span></div>
+    <div class="srow"><div class="slab"><b>启用 Telegram 推送</b><div class="shint">与钉钉/邮件并联：心跳、日报、达标都推；图床选「不上传·直传」时图片作为照片发进群</div></div><div class="sctl"><input type="checkbox" class="switch" ${((u.notifier||{}).telegram||{}).enabled?'checked':''} onchange="setTg(${i},'enabled',this.checked);chSync(this,${i},'telegram')"></div></div>
+    <div class="srow"><div class="slab"><b>Bot Token</b><div class="shint">@BotFather 建 bot 后给的 123456:ABC-…；凭据仅存本机 config.yaml</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="123456:ABC-…" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).telegram||{}).bot_token||'')}" onchange="setTg(${i},'bot_token',this.value);chSync(this,${i},'telegram')"></div></div>
+    <div class="srow"><div class="slab"><b>群 chat_id</b><div class="shint">把 bot 拉进群发条消息后取；群为负数（超级群 -100 开头）</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="-100…" style="width:100%;text-align:left" value="${esc(String(((u.notifier||{}).telegram||{}).chat_id||''))}" onchange="setTg(${i},'chat_id',this.value);chSync(this,${i},'telegram')"></div></div>
+    <div class="srow"><div class="slab"><b>代理（可选）</b><div class="shint">国内直连 api.telegram.org 不通时填 http://… 或 socks5://127.0.0.1:1080（socks 需装 socksio）</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="socks5://127.0.0.1:1080" style="width:100%;text-align:left" value="${esc(((u.notifier||{}).telegram||{}).proxy||'')}" onchange="setTg(${i},'proxy',this.value)"></div></div>
+    <div class="srow"><div class="slab"><b>群指令</b><div class="shint">群里可用 /price /watch /unwatch /routes /scan 与 @bot 对话；改后重启生效</div></div><div class="sctl"><input type="checkbox" class="switch" ${((u.notifier||{}).telegram||{}).commands?'checked':''} onchange="setTg(${i},'commands',this.checked)"></div></div>
+    <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实发一条到群里，验证 Token、chat_id 与代理可用</div></div><div class="sctl"><button class="btn2" onclick="testTg(${i},this)">测试 Telegram（用表单当前值）</button></div></div></div>
    <div class="chcard${_chOK.aliyun?' on':(((u.notifier||{}).aliyun||{}).enabled?' todo':'')}" data-ch="aliyun"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot${_chOK.aliyun?' on':(((u.notifier||{}).aliyun||{}).enabled?' mid':'')}"></span>阿里云电话/短信<span class="muted">${_chLbl(!!((u.notifier||{}).aliyun||{}).enabled,_chOK.aliyun)}</span><span class="chev open">▾</span></div>
     <div class="srow"><div class="slab"><b>云监控事件回调 URL</b><div class="shint">留空关闭；云监控 CRITICAL 事件触发电话/短信</div></div><div class="sctl" style="flex:1;min-width:0"><input style="width:100%;text-align:left" value="${esc(((u.notifier||{}).aliyun||{}).url||'')}" onchange="setAy(${i},'url',this.value);chSync(this,${i},'aliyun')"></div></div>
     <div class="srow"><div class="slab"><b>AccessKey ID / Secret</b><div class="shint">建议只授云监控只读权限，仅存本机 config.yaml</div></div><div class="sctl"><input autocomplete="off" placeholder="ID" style="width:110px" value="${esc(((u.notifier||{}).aliyun||{}).user||'')}" onchange="setAy(${i},'user',this.value)"><input autocomplete="off" type="password" placeholder="Secret" style="width:110px" value="${esc(((u.notifier||{}).aliyun||{}).password||'')}" onchange="setAy(${i},'password',this.value)"></div></div>
@@ -27487,15 +27498,15 @@ function buildForm(){if(!CFG)return;let h='',gh='';
     <div class="srow"><div class="slab"><b>收件邮箱</b><div class="shint">多个逗号分隔；填发件账号自己=自发自收；加家人邮箱即可同收</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="you@163.com 或多个" style="width:100%;text-align:left" value="${esc(em.to||'')}" onchange="setEm(${i},${k},'to',this.value)"></div></div>
     <div class="srow"><div class="slab"><b>通路验证</b><div class="shint">真实发一封测试邮件（正文=控制台整页截图，与正式推送同形态），授权码对错一试便知</div></div><div class="sctl"><button class="btn2" onclick="testEm(${i},${k},this)">测试邮件（用表单当前值）</button></div></div>
     <div class="hint">免费方案：163/QQ 邮箱网页版设置开启 SMTP 拿「授权码」即可。邮件正文=控制台整页截图直嵌（与网页 100% 同视觉），渲染失败自动降级纯文字。可添加多个邮箱通道并联发送。</div></div>`).join('')}
-   <div class="chcard ih-${ih.provider==='ghimg'?'ghimg':(ih.provider==='smms'?'smms':'free')}" data-ch="imghost"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot on"></span>推送图床<span class="muted">${({ghimg:'GitHub 图库',smms:'sm.ms'})[ih.provider]||'freeimage'}</span><span class="chev open">▾</span></div>
-    <div class="srow"><div class="slab"><b>图床服务</b><div class="shint">推送图文里图片的存放处；钉钉图空白/裂图 = 当前图床拉不到，切这里换床</div></div><div class="sctl"><span class="chip schip ihchip${ih.provider==='ghimg'?' on':''}" data-p="ghimg" onclick="setIh(${i},'provider','ghimg',this)">GitHub 图库</span><span class="chip schip ihchip${(ih.provider||'freeimage')!=='smms'&&ih.provider!=='ghimg'?' on':''}" data-p="freeimage" onclick="setIh(${i},'provider','freeimage',this)">freeimage</span><span class="chip schip ihchip${ih.provider==='smms'?' on':''}" data-p="smms" onclick="setIh(${i},'provider','smms',this)">sm.ms</span></div></div>
+   <div class="chcard ih-${ih.provider==='ghimg'?'ghimg':(ih.provider==='smms'?'smms':'free')}" data-ch="imghost"><div class="chhead" role="button" onclick="foldCh(this)"><span class="lgdot on"></span>推送图床<span class="muted">${IH_LABEL[ih.provider]||'freeimage'}</span><span class="chev open">▾</span></div>
+    <div class="srow"><div class="slab"><b>图床服务</b><div class="shint">推送图文里图片的存放处；钉钉图空白/裂图 = 当前图床拉不到，切这里换床</div></div><div class="sctl"><span class="chip schip ihchip${ih.provider==='ghimg'?' on':''}" data-p="ghimg" onclick="setIh(${i},'provider','ghimg',this)">GitHub 图库</span><span class="chip schip ihchip${(ih.provider||'freeimage')!=='smms'&&ih.provider!=='ghimg'&&ih.provider!=='local'?' on':''}" data-p="freeimage" onclick="setIh(${i},'provider','freeimage',this)">freeimage</span><span class="chip schip ihchip${ih.provider==='smms'?' on':''}" data-p="smms" onclick="setIh(${i},'provider','smms',this)">sm.ms</span><span class="chip schip ihchip${ih.provider==='local'?' on':''}" data-p="local" onclick="setIh(${i},'provider','local',this)">不上传·直传</span></div></div>
     <div class="srow ih-repo"><div class="slab"><b>GitHub 图库仓库</b><div class="shint">公开仓库 owner/name（如 dengmeiluan/ticket-img）；Contents API 上传 + jsDelivr 直链显示，路径含时分戳防 CDN 陈旧缓存</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="owner/repo" style="width:100%;text-align:left" value="${esc(ih.repo||'')}" onchange="setIh(${i},'repo',this.value)"></div></div>
     <div class="srow ih-ghtoken"><div class="slab"><b>GitHub Token（PAT）</b><div class="shint">contents:write 权限；凭据仅存本机 config.yaml，保存即热生效</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="ghp_… / github_pat_…" style="width:100%;text-align:left" value="${esc(ih.token||'')}" onchange="setIh(${i},'token',this.value)"></div></div>
     <div class="srow ih-proxy"><div class="slab"><b>上传代理（可选）</b><div class="shint">api.github.com 直连失败时按此代理重试一次；显示端读者网络直连 jsDelivr，与代理无关</div></div><div class="sctl" style="flex:1;min-width:0"><input placeholder="http://127.0.0.1:7897" style="width:100%;text-align:left" value="${esc(ih.proxy||'')}" onchange="setIh(${i},'proxy',this.value)"></div></div>
     <div class="srow ih-token"><div class="slab"><b>sm.ms API Token</b><div class="shint">选 sm.ms 时必填；凭据仅存本机 config.yaml</div></div><div class="sctl" style="flex:1;min-width:0"><input type="password" autocomplete="off" placeholder="粘贴 sm.ms 的 API Token" style="width:100%;text-align:left" value="${esc(ih.token||'')}" onchange="setIh(${i},'token',this.value,this)"></div></div>
     <span class="srow"><span class="slab"><b>通路验证</b><span class="shint" style="display:block">传一张 1px 测试图，验证当前所选图床真实可上传（不走降级链，失败即如实报错）</span></span><span class="sctl"><button class="btn2" onclick="testImghost(${i},this)">测试上传（用表单当前值）</button></span></span>
     <span class="ihtest" id="ihtest-${i}" style="display:none"></span>
-    <div class="hint">GitHub 图库=主通路（token 上传自家公开仓库，显示端读者网络直连 jsDelivr）。freeimage 上传端已停（历史备案，不选为宜）；sm.ms 需<a href="https://sm.ms" target="_blank" rel="noopener" style="color:var(--blue)">注册</a>后取 <a href="https://sm.ms/home/apitoken" target="_blank" rel="noopener" style="color:var(--blue)">API Token</a>。推送图空白？先「测试上传」如实验当前床。</div></div>
+    <div class="hint">GitHub 图库=主通路（token 上传自家公开仓库，显示端读者网络直连 jsDelivr）。freeimage 上传端已停（历史备案，不选为宜）；sm.ms 需<a href="https://sm.ms" target="_blank" rel="noopener" style="color:var(--blue)">注册</a>后取 <a href="https://sm.ms/home/apitoken" target="_blank" rel="noopener" style="color:var(--blue)">API Token</a>。推送图空白？先「测试上传」如实验当前床。只用 Telegram/邮件时选「不上传·直传」：图不出本机，直接作为照片/内嵌图发出（钉钉、Server酱、ntfy 看不到图）。</div></div>
    <button class="btn2 chemadd" onclick="addEm(${i})">${ic('plus')} 添加邮箱通道</button>
    </div></div></div>`;});
  /* 关注面板是单实例静态 DOM：重建用户卡前先寄存，再挂进当前展开用户的
@@ -28640,6 +28651,9 @@ function setNtfy(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
  CFG[i].notifier.ntfy[k]=v;
  CFG[i].notifier.ntfy.enabled=!!(CFG[i].notifier.ntfy.topic||'').trim();
  syncUserHead(i);}
+function setTg(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
+ const t=CFG[i].notifier.telegram=CFG[i].notifier.telegram||{};
+ t[k]=(typeof v==='string')?v.trim():v;}   /* enabled/commands 布尔；token/chat_id/proxy 字符串直存 */
 function setBark(i,k,v){CFG[i].notifier=CFG[i].notifier||{};
  CFG[i].notifier.bark=CFG[i].notifier.bark||{};
  CFG[i].notifier.bark[k]=v;   /* enabled=显式开关；key/server 字符串直存 */
@@ -28663,12 +28677,15 @@ function _chReady(typ,u,em){
  if(typ==='dingtalk'){const x=n.dingtalk||{};return !!(x.enabled&&s(x.webhook));}
  if(typ==='ntfy'){const x=n.ntfy||{};return !!(x.enabled&&s(x.topic));}
  if(typ==='bark'){const x=n.bark||{};return !!(x.enabled&&s(x.key));}
+ if(typ==='telegram'){const x=n.telegram||{};return !!(x.enabled&&s(x.bot_token)&&s(x.chat_id));}
  if(typ==='aliyun'){const x=n.aliyun||{};return !!(x.enabled&&s(x.url)&&s(x.user));}
  if(typ==='serverchan'){const x=n.serverchan||{};return !!(x.enabled&&s(x.send_key));}
  if(typ==='email'){return !!(em&&em.enabled&&s(em.user)&&s(em.password)&&s(em.to));}
  if(typ==='imghost'){const x=n.image_host||{};
   if((x.provider||'freeimage')==='ghimg')return !!(s(x.repo)&&s(x.token));
-  if(x.provider==='smms')return !!s(x.token);return false;}
+  if(x.provider==='smms')return !!s(x.token);
+  if(x.provider==='local')return true;   /* 不上传：无凭据可缺 */
+  return false;}
  return false;}
 function _chLbl(on,ready){return ready?'已启用':(on?'待完善':'未启用');}
 function togglePw(id,el){
@@ -28832,6 +28849,18 @@ async function _restartPoll(deadline){
  const h=$('restartHint');
  if(h)h.innerHTML='⚠ 超时未检测到进程回来——请到服务器手动启动（python main.py）';
  toast('❌ 重启超时，请手动检查进程','err');}
+async function testTg(i,b){if(b&&b.classList.contains('busy'))return;
+ const t=(CFG[i].notifier||{}).telegram||{};
+ if(!(t.bot_token||'').trim()||!String(t.chat_id||'').trim()){toast('❌ 请先填写 Bot Token 与 chat_id','err');return;}
+ b.classList.add('busy');
+ try{const r=await fetch('/api/test-telegram',{method:'POST',
+  headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({bot_token:t.bot_token,chat_id:String(t.chat_id),proxy:t.proxy||''})});
+  const j=await r.json();
+  toast(j.ok?'✈️ Telegram 测试已发到群里，请查收':'❌ '+(j.err||'失败'),j.ok?'ok':'err');}
+ catch(e){toast('❌ '+(/abort|timeout/i.test(String(e))
+   ?'请求超时，请重试':'网络异常，请检查服务是否在运行'),'err');}
+ b.classList.remove('busy');}
 async function testBark(i,b){if(b&&b.classList.contains('busy'))return;
  const bk=(CFG[i].notifier||{}).bark||{};
  if(!(bk.key||'').trim()){toast('❌ 请先填写 Bark Key','err');return;}
@@ -28849,6 +28878,7 @@ async function testBark(i,b){if(b&&b.classList.contains('busy'))return;
 async function testImghost(i,b){if(b&&b.classList.contains('busy'))return;
  const _ih=(CFG[i].notifier||{}).image_host||{};
  const _p=(_ih.provider||'freeimage');
+ if(_p==='local'){toast('「不上传·直传」不经图床：图片由 Telegram 作为照片、邮件作为内嵌图直接发出，无需测试上传','ok');return;}
  const p=(_p==='smms'||_p==='ghimg')?_p:'freeimage';   /* 未知值落 freeimage 同模板标签口径 */
  if(p==='smms'&&!(_ih.token||'').trim()){toast('❌ 请先填写 sm.ms Token','err');return;}
  if(p==='ghimg'&&(!(_ih.repo||'').trim()||!(_ih.token||'').trim())){toast('❌ 请先填写 GitHub 图库仓库与 Token','err');return;}
@@ -29022,10 +29052,10 @@ function syncUserHead(i){
  const _wtOn=nt.win_toast!==false;
  const _emL=ems(i);
  const _okDt=_chReady('dingtalk',u),_okNt=_chReady('ntfy',u),_okBk=_chReady('bark',u),
-       _okAy=_chReady('aliyun',u),_okSc=_chReady('serverchan',u),
+       _okAy=_chReady('aliyun',u),_okSc=_chReady('serverchan',u),_okTg=_chReady('telegram',u),
        _okEm=_emL.map(e=>_chReady('email',u,e));
- const _anyOn=!!(dt.enabled||((u.notifier||{}).ntfy||{}).enabled||((u.notifier||{}).bark||{}).enabled||((u.notifier||{}).aliyun||{}).enabled||((u.notifier||{}).serverchan||{}).enabled||_emL.some(e=>e.enabled));
- const _anyPush=!!(_okDt||_okNt||_okBk||_okAy||_okSc||_okEm.some(Boolean));
+ const _anyOn=!!(dt.enabled||((u.notifier||{}).ntfy||{}).enabled||((u.notifier||{}).bark||{}).enabled||((u.notifier||{}).aliyun||{}).enabled||((u.notifier||{}).serverchan||{}).enabled||((u.notifier||{}).telegram||{}).enabled||_emL.some(e=>e.enabled));
+ const _anyPush=!!(_okDt||_okNt||_okBk||_okAy||_okSc||_okTg||_okEm.some(Boolean));
  const head=card.querySelector('.uhead2');if(head){
   const b=head.querySelector('b');if(b)b.textContent=u.name||'';
   const av=head.querySelector('.uava');if(av)av.textContent=(u.name||'?').slice(0,1);
@@ -29048,6 +29078,7 @@ function syncUserHead(i){
   _okDt?'钉钉✓':(dt.enabled?'钉钉待完善':'钉钉×'),
   (nt.ntfy||{}).enabled?(_okNt?'ntfy✓':'ntfy待完善'):null,
   ((nt.bark||{}).enabled?(_okBk?'Bark✓':'Bark待完善'):null),
+  ((nt.telegram||{}).enabled?(_okTg?'Telegram✓':'Telegram待完善'):null),
   (nt.aliyun||{}).enabled?(_okAy?'电话✓':'电话待完善'):null,
   (nt.serverchan||{}).enabled?(_okSc?'微信✓':'微信待完善'):null,
   (_emL.filter(e=>e.enabled).length
@@ -29064,6 +29095,7 @@ function syncUserHead(i){
  _syncCard('dingtalk',_okDt,!!dt.enabled);
  _syncCard('ntfy',_okNt,!!((nt.ntfy||{}).enabled));
  _syncCard('bark',_okBk,!!((nt.bark||{}).enabled));
+ _syncCard('telegram',_okTg,!!((nt.telegram||{}).enabled));
  _syncCard('aliyun',_okAy,!!((nt.aliyun||{}).enabled));
  _syncCard('serverchan',_okSc,!!((nt.serverchan||{}).enabled));
  _emL.forEach((em,k)=>_syncCard('email'+k,_okEm[k],!!em.enabled));
@@ -29471,6 +29503,8 @@ function addDate(i,j){
 function delDate(i,j,d){const rs=CFG[i].routes[j];
  rs.dates=(rs.dates||[]).filter(x=>x!==d);buildForm();toast('已删 '+d+'（保存后生效）','ok');}
 function setDt(i,k,v){CFG[i].notifier=CFG[i].notifier||{};CFG[i].notifier.dingtalk=CFG[i].notifier.dingtalk||{};CFG[i].notifier.dingtalk[k]=v;syncUserHead(i);}
+/* 图床 provider 显示名单源（卡头模板与 setIh 切换共用） */
+const IH_LABEL={ghimg:'GitHub 图库',smms:'sm.ms',local:'不上传·直传'};
 function setIh(i,k,v,el){CFG[i].notifier=CFG[i].notifier||{};const ih=CFG[i].notifier.image_host=CFG[i].notifier.image_host||{};ih[k]=(''+v).trim();
  if(k!=='provider'&&el&&el.value!==ih[k])el.value=ih[k];   /* trim 回写：落盘已清洗，输入框不留尾随空格残影 */
  if(k==='provider'&&el){const c=el.closest('.chcard');if(c){
@@ -29480,7 +29514,7 @@ function setIh(i,k,v,el){CFG[i].notifier=CFG[i].notifier||{};const ih=CFG[i].not
   c.classList.toggle('ih-smms',ih.provider==='smms');
   c.classList.toggle('ih-ghimg',ih.provider==='ghimg');
   c.querySelectorAll('.ihchip').forEach(x=>x.classList.toggle('on',x.dataset.p===ih.provider));
-  const m=c.querySelector('.chhead .muted');if(m)m.textContent=({ghimg:'GitHub 图库',smms:'sm.ms'})[ih.provider]||'freeimage';}}}
+  const m=c.querySelector('.chhead .muted');if(m)m.textContent=IH_LABEL[ih.provider]||'freeimage';}}}
 async function testPush(i,b){b=b||_evtT();
  if(!b||b.classList.contains('busy'))return;
  const dt=CFG[i].notifier&&CFG[i].notifier.dingtalk||{};
@@ -44790,6 +44824,25 @@ class _Handler(BaseHTTPRequestHandler):
                                 (getattr(n, "last_errcode", None) and ("HTTP %s" % n.last_errcode))
                                 or getattr(n, "last_err", None)
                                 or "发送失败（详见服务日志）")})   # test-bark：失败详情透传（通道审计 P2-2）
+            except Exception as e:
+                self._json({"ok": False, "err": str(e)}, 500)
+        elif self.path == "/api/test-telegram":
+            try:
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length) or b"{}")
+                token = str(body.get("bot_token") or "").strip()
+                chat = str(body.get("chat_id") or "").strip()
+                if not (token and chat):
+                    self._json({"ok": False, "err": "请先填写 Bot Token 与 chat_id"})
+                    return
+                from core.notifier import TelegramNotifier
+                now = __import__('datetime').datetime.now().strftime('%H:%M:%S')
+                n = TelegramNotifier(token, chat, st.logger,
+                                     proxy=str(body.get("proxy") or "").strip())
+                ok = n.send("✈️ Telegram 测试——通路正常",
+                            "⏰ %s\n收到即代表推送链路可用" % now)
+                self._json({"ok": bool(ok),
+                            "err": None if ok else (n.last_err or "发送失败（详见服务日志）")})
             except Exception as e:
                 self._json({"ok": False, "err": str(e)}, 500)
         elif self.path == "/api/test-email":

@@ -25,7 +25,7 @@ def _mk(monkeypatch, replies):
 
 
 def test_send_ok_html(monkeypatch):
-    tg, calls = _mk(monkeypatch, [(200, {"ok": True})])
+    tg, calls = _mk(monkeypatch, [(200, {"ok": True}), (200, {"ok": True})])
     desp = ("#### 🎯 达标 HKG→NRT\n\n> **￥1890** <含税>\n"
             "[打开携程](https://flights.ctrip.com/x?a=1&b=2)\n"
             "![走势](https://img.example/a.png)\n"
@@ -41,7 +41,11 @@ def test_send_ok_html(monkeypatch):
     assert t.startswith("<b>达标</b>\n<b>🎯 达标 HKG→NRT</b>")
     assert "<b>￥1890</b> &lt;含税&gt;" in t
     assert '<a href="https://flights.ctrip.com/x?a=1&amp;b=2">打开携程</a>' in t
-    assert '<a href="https://img.example/a.png">🖼 走势</a>' in t
+    assert "img.example" not in t and "走势" not in t      # 图不进正文
+    photo = calls[1]
+    assert photo[0].endswith("/sendPhoto")
+    assert photo[1]["json"]["photo"] == "https://img.example/a.png"
+    assert photo[1]["json"]["caption"] == "走势"
     assert "127.0.0.1" not in t and "控制台" in t   # 回环死链剥壳留字
     assert t.endswith('<a href="http://mac-air:8765/d/1">打开详情</a>')
     assert tg._fail_streak == 0
@@ -84,3 +88,25 @@ def test_build_notifier_wiring():
     assert N.build_notifier({"telegram": dict(on, enabled=False)}, LOG) is None
     assert N.build_notifier({"telegram": dict(on, chat_id="")}, LOG) is None
     assert N.build_notifier({"telegram": "bad"}, LOG) is None
+
+
+def test_local_chart_goes_as_photo_bytes(monkeypatch, tmp_path):
+    import report
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    png = tmp_path / "data" / "flights_table_hzh_HKGNRT.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\nfake")
+    url = report.upload_chart(str(png), None, LOG, ih={"provider": "local"})
+    assert url.startswith("local://charts/") and url.endswith(".png")
+    tg, calls = _mk(monkeypatch, [(200, {"ok": True}), (200, {"ok": True})])
+    assert tg.send("心跳", "#### 📋 明细总表\n\n![明细总表](%s)\n" % url) is True
+    assert "local://" not in calls[0][1]["json"]["text"]
+    sent = calls[1][1]
+    assert calls[1][0].endswith("/sendPhoto") and sent["data"]["caption"] == "明细总表"
+    assert sent["files"]["photo"][1] == png.read_bytes()
+
+
+def test_photo_failure_does_not_fail_push(monkeypatch):
+    tg, calls = _mk(monkeypatch, [(200, {"ok": True}), (400, {"ok": False})])
+    assert tg.send("x", "![图](https://img.example/b.png)") is True
+    assert tg._fail_streak == 0 and len(calls) == 2

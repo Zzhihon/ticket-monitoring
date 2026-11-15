@@ -996,7 +996,7 @@ def _inline_push_images(desp: str, logger, stats: dict = None) -> tuple:
     urls, seen = [], set()
     for m in _PUSH_IMG_RE.finditer(desp or ""):
         u = m.group(2)
-        if u.startswith(("http://", "https://")) and u not in seen:
+        if u.startswith(("http://", "https://", "local://")) and u not in seen:
             seen.add(u)
             urls.append(u)
     if stats is not None:
@@ -1020,7 +1020,7 @@ def _inline_push_images(desp: str, logger, stats: dict = None) -> tuple:
                 logger.info("[Email] 推送图本地直嵌 %s", u[:80])
         else:
             fmt = ""
-        if not fmt:
+        if not fmt and not u.startswith("local://"):   # 本地引用没有下载地址
             try:
                 data = _fetch_push_image(u)
                 fmt = (_sniff_img_fmt(data)
@@ -1661,6 +1661,7 @@ class AliyunAlertNotifier:
 
 
 _TG_MD_LINK = _re.compile(r"(!?)\[([^\]]*)\]\(([^)\s]+)\)")
+_TG_PHOTOS_MAX = 6   # 一条推送最多跟几张图（明细表+各航线走势）
 _TG_NOTE = "（已截断，完整明细见控制台）"
 
 
@@ -1672,12 +1673,14 @@ def _tg_inline(s: str) -> str:
     for m in _TG_MD_LINK.finditer(s):
         out.append(_esc_md(s[pos:m.start()]))
         is_img, text, url = m.group(1), m.group(2), m.group(3)
-        text = text or ("图" if is_img else url)
         if is_img:
-            text = "🖼 " + text
+            # 图片不进正文：send() 把它们作为照片跟在文字后面发
+            pos = m.end()
+            continue
+        text = text or url
         if url.startswith(("http://", "https://")) and launch_is_public(url):
             out.append('<a href="%s">%s</a>' % (_esc_md(url), _esc_md(text)))
-        elif not is_img:
+        else:
             out.append(_esc_md(text))
         pos = m.end()
     out.append(_esc_md(s[pos:]))
@@ -1744,6 +1747,45 @@ class TelegramNotifier(_HeartbeatBackoff):
             "%s/bot%s/sendMessage" % (self.api_base, self.bot_token),
             json=payload, timeout=15, trust_env=False, proxy=self.proxy)
 
+    def _photos(self, desp: str):
+        """desp 里的图 → [(说明, 本地字节或公网直链)]。本地引用（图床选
+        local）与图库直链都先试本地渲染图（零网络，与邮件同一反推）；
+        本地读不到的公网图交给 Telegram 服务器去拉。"""
+        out, seen = [], set()
+        for alt, url in _PUSH_IMG_RE.findall(desp or ""):
+            if url in seen or len(out) >= _TG_PHOTOS_MAX:
+                continue
+            seen.add(url)
+            data = _local_push_image(url)
+            if data:
+                out.append((alt, data))
+            elif url.startswith(("http://", "https://")) and launch_is_public(url):
+                out.append((alt, url))
+        return out
+
+    def _send_photo(self, alt: str, photo) -> bool:
+        url = "%s/bot%s/sendPhoto" % (self.api_base, self.bot_token)
+        try:
+            if isinstance(photo, bytes):
+                r = httpx.post(url, data={"chat_id": self.chat_id, "caption": alt[:200],
+                                          **({"message_thread_id": int(self.thread_id)}
+                                             if self.thread_id else {})},
+                               files={"photo": ("chart.png", photo, "image/png")},
+                               timeout=60, trust_env=False, proxy=self.proxy)
+            else:
+                r = httpx.post(url, json={"chat_id": self.chat_id, "photo": photo,
+                                          "caption": alt[:200],
+                                          **({"message_thread_id": int(self.thread_id)}
+                                             if self.thread_id else {})},
+                               timeout=60, trust_env=False, proxy=self.proxy)
+            if r.status_code == 200 and (r.json() or {}).get("ok"):
+                return True
+            self.logger.warning("[Telegram] 图片没发出去 %s: HTTP %s %s",
+                                alt, r.status_code, (r.text or "")[:120])
+        except Exception as e:
+            self.logger.warning("[Telegram] 图片没发出去 %s: %s", alt, e)
+        return False
+
     def send(self, title: str, desp: str = "", at_mobiles: list = None,
              is_at_all: bool = False, launch: str = "") -> bool:
         if not (self.bot_token and self.chat_id):
@@ -1768,9 +1810,14 @@ class TelegramNotifier(_HeartbeatBackoff):
         except Exception as e:
             ok, self.last_err = False, str(e)[:160]
         self._fail_streak = 0 if ok else self._fail_streak + 1
+        photos = 0
+        if ok:
+            # 图跟在文字后面：文字已送达即算推送成功，单张图失败只留日志
+            photos = sum(self._send_photo(alt, ph) for alt, ph in self._photos(desp))
         _append_push_history(title, desp, ok, ch="telegram")
         if ok:
-            self.logger.info("[Telegram] 已推送: %s", (title or "")[:50])
+            self.logger.info("[Telegram] 已推送: %s%s", (title or "")[:50],
+                             "（图 %d 张）" % photos if photos else "")
         else:
             # last_err 不含 token（URL 只进请求行，不进异常/回执文本）
             self.logger.warning("[Telegram] 推送失败(第%d次): %s",

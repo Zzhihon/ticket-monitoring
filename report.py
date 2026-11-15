@@ -2194,6 +2194,15 @@ def upload_chart(png_path, cfg, logger, ih=None):
     if ih is None:
         ih = _image_host_cfg(cfg or {})
     provider = (ih.get("provider") or "").strip().lower()
+    if provider == "local":
+        # 不上传：只给能直接传文件的通道用（Telegram 发照片、邮件 CID
+        # 内嵌）。路径形态与 ghimg 同构（charts/日期/stem_时分秒），
+        # notifier._local_push_image 按它反推本地 data/{stem}.png；
+        # 钉钉/Server酱/ntfy 只认公网直链，选 local 时它们看不到图
+        now = datetime.now()
+        stem, ext = os.path.splitext(os.path.basename(png_path))
+        return (f"local://charts/{now.strftime('%Y%m%d')}/"
+                f"{stem}_{now.strftime('%H%M%S')}{ext}")
     if provider == "freeimage":
         return upload_freeimage(png_path, logger)
     if provider == "ghimg" and (ih.get("repo") or "").strip() \
