@@ -2523,7 +2523,7 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
         走的是不同入口/登录墙，混在一起自检会把"国际被拦"误读成"整家挂"。
         查询取该 scope 第一条航线的第一个日期——自检验的是链路，不是价格。
         """
-        from datetime import datetime as _dtm
+        from datetime import datetime as _dtm, timedelta as _tdl
         _want = str(scope or "").strip().lower()
         if _want not in ("", "dom", "intl"):
             return {"ok": False, "err": "scope 必须是 dom/intl/空"}
@@ -2571,7 +2571,10 @@ def make_sweep_job(cfg, rt, logger, storage, charts_fn):
                         "err": "当前配置没有%s航线，无法按该范围自检"
                                % ("国际" if _want == "intl" else "国内")}
             if not q:
-                q = ("SHA", "NRT", _dtm.now().strftime("%Y-%m-%d"))
+                # 兜底用明天：同程等窗历从明天起，用今天会被当「已过期」
+                # 整轮跳过，自检 0 条、登录态永远停在「已存待验」
+                q = ("SHA", "NRT", (_dtm.now() + _tdl(days=1))
+                     .strftime("%Y-%m-%d"))
             warm = None
             if str(getattr(c, "warmup_url", "") or "").strip():
                 with channel_slot(c.name):
