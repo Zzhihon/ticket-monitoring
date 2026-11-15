@@ -222,3 +222,15 @@ def test_ask_confirms_mutations_and_runs_reads(monkeypatch):
     b.on_button({"id": "q2", "data": "ok:" + pid})        # 重复点不再执行
     assert len(b.saved) == 1
     assert calls[-1][1]["text"].startswith("已过期")
+
+
+def test_other_chats_are_logged_and_private_gets_hint(caplog):
+    b = _Bot([])
+    calls = []
+    b._call = lambda m, **kw: calls.append((m, kw))
+    with caplog.at_level(logging.INFO):
+        b.ignored({"type": "private", "id": 42})
+        b.ignored({"type": "supergroup", "id": -1009})
+    assert "忽略来自 private 会话 42" in caplog.text
+    assert "忽略来自 supergroup 会话 -1009" in caplog.text
+    assert [kw["chat_id"] for m, kw in calls] == [42]   # 只回私聊

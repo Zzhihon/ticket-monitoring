@@ -306,7 +306,9 @@ class TelegramBot(threading.Thread):
                 self._save_offset(offset)
                 cq = u.get("callback_query")
                 msg = (cq or {}).get("message") or u.get("message") or {}
-                if str((msg.get("chat") or {}).get("id")) != self.chat_id:
+                chat = msg.get("chat") or {}
+                if str(chat.get("id")) != self.chat_id:
+                    self.ignored(chat, cq)
                     continue
                 try:
                     if cq:
@@ -316,6 +318,18 @@ class TelegramBot(threading.Thread):
                 except Exception as e:
                     self.logger.warning("[TG指令] 处理失败: %s", e)
                     self.reply("处理失败：%s" % str(e)[:200])
+
+    def ignored(self, chat: dict, cq=None):
+        """非配置群的消息：留一行日志（否则「bot 不回」无从查起），私聊
+        再回一句去群里用——不执行任何指令，私聊里谁都能找到这个 bot。"""
+        self.logger.info("[TG指令] 忽略来自 %s 会话 %s 的消息（只认群 %s）",
+                         chat.get("type"), chat.get("id"), self.chat_id)
+        if chat.get("type") == "private" and not cq:
+            try:
+                self._call("sendMessage", chat_id=chat.get("id"),
+                           text="我只在指定的群里干活，请到群里 @我 或发 /help")
+            except Exception:
+                pass
 
     # ---- 指令 ----
     def handle(self, text: str):
