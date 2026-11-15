@@ -9,8 +9,8 @@
 
 开关：notifier.telegram.commands: true（默认关，不开就和没有这个模块一样）。
 
-自然语言（可选，notifier.telegram.llm）：@bot 说一句话，由 OpenAI 兼容
-接口（DeepSeek 等）把它翻译成上面的指令，再交给同一套解析与校验——模型
+自然语言（可选，notifier.telegram.llm，一个或一串模型，按顺序兜底）：@bot
+说一句话，由 OpenAI 兼容接口（CodeBuddy hy4、DeepSeek 等）把它翻译成上面的指令，再交给同一套解析与校验——模型
 只产出指令文本，不直接碰配置。会改东西的指令（/watch /unwatch /scan）
 先回一条带「确认/取消」按钮的消息，点了确认才执行。
 """
@@ -106,29 +106,74 @@ def parse_watch(args: list) -> dict:
     return route
 
 
-def nl_to_commands(llm: dict, text: str, routes: list, post=None) -> dict:
-    """一句话 → {"commands": [...], "reply": "..."}。只认 / 开头且属于已知
-    指令的条目，模型多给的东西丢掉；接口出错直接抛（原话回群里）。"""
-    post = post or httpx.post
+def chat_once(llm: dict, messages: list) -> str:
+    """调一次 OpenAI 兼容 chat/completions，返回 content 文本。
+    llm 键：api_base / api_key / model / headers（额外请求头，值里的 {uuid}
+    每次请求换新值）/ stream（网关只收流式时开，如 CodeBuddy 的 hy4）/
+    timeout（秒，默认 30）/ json_mode（默认开 response_format=json_object）。"""
+    url = "%s/chat/completions" % str(llm.get("api_base")
+                                      or "https://api.deepseek.com").rstrip("/")
+    rid = uuid.uuid4().hex
+    headers = {str(k): str(v).replace("{uuid}", rid)
+               for k, v in (llm.get("headers") or {}).items()}
+    headers["Authorization"] = "Bearer %s" % llm.get("api_key", "")
+    body = {"model": llm.get("model") or "deepseek-flash", "messages": messages}
+    if llm.get("json_mode", True):
+        body["response_format"] = {"type": "json_object"}
+    timeout = float(llm.get("timeout") or 30)
+    if not llm.get("stream"):
+        r = httpx.post(url, headers=headers, json=body, timeout=timeout,
+                       trust_env=False)
+        if r.status_code != 200:
+            raise RuntimeError("HTTP %s %s" % (r.status_code, r.text[:120]))
+        return r.json()["choices"][0]["message"]["content"] or ""
+    body["stream"] = True
+    parts = []
+    with httpx.stream("POST", url, headers=headers, json=body,
+                      timeout=timeout, trust_env=False) as r:
+        if r.status_code != 200:
+            raise RuntimeError("HTTP %s %s" % (r.status_code,
+                                               r.read().decode()[:120]))
+        for line in r.iter_lines():
+            data = line[5:].strip() if line.startswith("data:") else ""
+            if not data:
+                continue
+            if data == "[DONE]":
+                break
+            for c in json.loads(data).get("choices") or []:
+                parts.append((c.get("delta") or {}).get("content") or "")
+    return "".join(parts)
+
+
+def nl_to_commands(llms, text: str, routes: list, logger=None) -> dict:
+    """一句话 → {"commands": [...], "reply": "..."}。llms 是一个或一串
+    模型配置，按顺序试，前一个出错/超时/回的不是 JSON 就换下一个（免费
+    模型在前、付费兜底在后）；全挂才抛。只认 / 开头且属于已知指令的
+    条目，模型多给的东西丢掉。"""
     listing = "\n".join("%d. %s" % (i, route_label(r))
                          for i, r in enumerate(routes, 1)) or "（无）"
     prompt = (_NL_PROMPT.replace("{today}", date.today().isoformat())
               .replace("{routes}", listing))
-    r = post("%s/chat/completions" % str(llm.get("api_base")
-                                         or "https://api.deepseek.com").rstrip("/"),
-             headers={"Authorization": "Bearer %s" % llm.get("api_key", "")},
-             json={"model": llm.get("model") or "deepseek-flash",
-                   "messages": [{"role": "system", "content": prompt},
-                                {"role": "user", "content": text}],
-                   "response_format": {"type": "json_object"}},
-             timeout=60, trust_env=False)
-    if r.status_code != 200:
-        raise RuntimeError("模型接口 HTTP %s %s" % (r.status_code, r.text[:120]))
-    out = json.loads(r.json()["choices"][0]["message"]["content"] or "{}")
-    cmds = [c.strip() for c in (out.get("commands") or [])
-            if isinstance(c, str) and c.strip().startswith("/")
-            and c.strip()[1:].split()[0].lower() in _MUTATING | _READONLY]
-    return {"commands": cmds, "reply": str(out.get("reply") or "").strip()}
+    messages = [{"role": "system", "content": prompt},
+                {"role": "user", "content": text}]
+    errs = []
+    for llm in (llms if isinstance(llms, list) else [llms]):
+        name = llm.get("model") or "deepseek-flash"
+        try:
+            out = json.loads(chat_once(llm, messages) or "{}")
+            if not isinstance(out, dict):
+                raise ValueError("回的不是 JSON 对象")
+        except Exception as e:
+            errs.append("%s：%s" % (name, str(e)[:80]))
+            if logger:
+                logger.warning("[TG指令] 模型 %s 失败，换下一个: %s", name, e)
+            continue
+        cmds = [c.strip() for c in (out.get("commands") or [])
+                if isinstance(c, str) and c.strip().startswith("/")
+                and c.strip()[1:].split()[0].lower() in _MUTATING | _READONLY]
+        return {"commands": cmds, "reply": str(out.get("reply") or "").strip(),
+                "model": name}
+    raise RuntimeError("模型都没回上：" + "；".join(errs))
 
 
 def route_label(r: dict) -> str:
@@ -197,7 +242,9 @@ class TelegramBot(threading.Thread):
         self.user = user
         self.offset_path = offset_path
         llm = tg.get("llm")
-        self.llm = llm if isinstance(llm, dict) and llm.get("api_key") else None
+        llm = llm if isinstance(llm, list) else [llm]
+        self.llm = [x for x in llm if isinstance(x, dict) and x.get("api_key")] \
+            or None
         self.pending = {}   # 确认按钮 id → 待执行指令（进程内，重启即作废）
         # 长轮询 50s：读超时要比它长；trust_env=False 直连律，代理只认显式 proxy
         self.http = httpx.Client(proxy=str(tg.get("proxy") or "").strip()
@@ -292,7 +339,7 @@ class TelegramBot(threading.Thread):
         if not text:
             return
         routes = self._me(self._users()).get("routes") or []
-        out = nl_to_commands(self.llm, text, routes)
+        out = nl_to_commands(self.llm, text, routes, logger=self.logger)
         cmds = out["commands"]
         if out["reply"]:
             self.reply(out["reply"])

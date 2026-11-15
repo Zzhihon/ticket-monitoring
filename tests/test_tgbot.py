@@ -130,7 +130,7 @@ class _Resp:
         return {"choices": [{"message": {"content": self._c}}]}
 
 
-def test_nl_to_commands_filters_unknown():
+def test_nl_to_commands_filters_unknown(monkeypatch):
     seen = {}
 
     def post(url, **kw):
@@ -138,16 +138,70 @@ def test_nl_to_commands_filters_unknown():
         return _Resp(json.dumps({"commands": [
             "/watch HKG NRT %s %s 3000" % (D1, D2), "/rm -rf", "hello",
             "/price"], "reply": "好的"}))
-    out = T.nl_to_commands({"api_key": "k"}, "香港去东京", [], post=post)
+    monkeypatch.setattr(T.httpx, "post", post)
+    out = T.nl_to_commands({"api_key": "k"}, "香港去东京", [])
     assert out["commands"] == ["/watch HKG NRT %s %s 3000" % (D1, D2), "/price"]
     assert seen["url"] == "https://api.deepseek.com/chat/completions"
     assert seen["json"]["model"] == "deepseek-flash"
     assert date.today().isoformat() in seen["json"]["messages"][0]["content"]
 
 
+def test_nl_falls_back_in_order(monkeypatch):
+    tried = []
+
+    def chat(llm, messages):
+        tried.append(llm["model"])
+        if llm["model"] == "hy4":
+            raise RuntimeError("timeout")
+        if llm["model"] == "bad":
+            return "不是 JSON"
+        return json.dumps({"commands": ["/price"], "reply": ""})
+    monkeypatch.setattr(T, "chat_once", chat)
+    out = T.nl_to_commands([{"model": "hy4"}, {"model": "bad"},
+                            {"model": "deepseek-flash"}], "多少钱", [])
+    assert tried == ["hy4", "bad", "deepseek-flash"]
+    assert out["commands"] == ["/price"] and out["model"] == "deepseek-flash"
+    monkeypatch.setattr(T, "chat_once",
+                        lambda llm, m: (_ for _ in ()).throw(RuntimeError("x")))
+    with pytest.raises(RuntimeError, match="模型都没回上"):
+        T.nl_to_commands([{"model": "a"}, {"model": "b"}], "x", [])
+
+
+def test_chat_once_stream_and_headers(monkeypatch):
+    seen = {}
+
+    class _S:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_lines(self):
+            return iter(['data: {"choices":[{"delta":{"content":"{\\"a\\""}}]}', "",
+                         'data: {"choices":[{"delta":{"content":":1}"}}]}',
+                         "data: [DONE]", 'data: {"choices":[{"delta":{"content":"x"}}]}'])
+
+    def stream(method, url, **kw):
+        seen.update(method=method, url=url, **kw)
+        return _S()
+    monkeypatch.setattr(T.httpx, "stream", stream)
+    txt = T.chat_once({"api_base": "https://gw/v2/", "api_key": "t", "model": "hy4",
+                       "stream": True, "headers": {"X-Request-ID": "{uuid}",
+                                                   "x-product": "SaaS"}}, [])
+    assert txt == '{"a":1}'
+    assert seen["url"] == "https://gw/v2/chat/completions"
+    assert seen["json"]["stream"] is True
+    h = seen["headers"]
+    assert h["Authorization"] == "Bearer t" and h["x-product"] == "SaaS"
+    assert len(h["X-Request-ID"]) == 32
+
+
 def test_ask_confirms_mutations_and_runs_reads(monkeypatch):
     b = _Bot([])
-    b.llm = {"api_key": "k"}
+    b.llm = [{"api_key": "k"}]
     calls = []
     b._call = lambda m, **kw: calls.append((m, kw))
     b.reply = lambda text, buttons=None: b.out.append((text, buttons))
