@@ -4589,6 +4589,15 @@ def main():
             except Exception:
                 pass
             rt["web_port"] = int((cfg.get("web") or {}).get("port", 8765))
+            # Telegram 群指令（notifier.telegram.commands 开了才起线程）：
+            # 读写配置走刚起来的控制台 /api/config，所以放在 start_web 之后
+            try:
+                from core.tgbot import start_bot
+                start_bot(cfg, logger, rt["web_port"],
+                          str((cfg.get("output") or {}).get("db_path")
+                              or "data/prices.db"))
+            except Exception as _tg_err:
+                logger.warning("[TG指令] 启动失败: %s", _tg_err)
             rt["headless"] = bool((cfg.get("crawler") or {}).get(
                 "headless", True))
             # 采集代理启动态初值（热重载 diff 基准，r319）

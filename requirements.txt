@@ -16,6 +16,8 @@ tzdata>=2024.1
 # 可选后端）。装了会自动优先使用，没装退回「系统 OCR + cv2 预处理」，
 # 行为完全不变。它会带 onnxruntime（约 50–80MB），故不设成硬依赖。
 #   pip install ddddocr
+# 可选：socksio 让 Telegram 通道的 proxy 支持 socks5://（http:// 代理不需要）。
+#   pip install socksio
 # 可选：curl_cffi 提供 Chrome 的 TLS/JA3 指纹（core/net.py 优先用它发 HTTP，
 # 未安装则自动退回 httpx，行为不变）。需要更贴合浏览器指纹时装：
 #   pip install curl_cffi
