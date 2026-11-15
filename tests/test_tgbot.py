@@ -234,3 +234,24 @@ def test_other_chats_are_logged_and_private_gets_hint(caplog):
     assert "忽略来自 private 会话 42" in caplog.text
     assert "忽略来自 supergroup 会话 -1009" in caplog.text
     assert [kw["chat_id"] for m, kw in calls] == [42]   # 只回私聊
+
+
+def test_ask_keeps_context_between_turns(monkeypatch):
+    b = _Bot([])
+    b.llm = [{"api_key": "k"}]
+    b._call = lambda m, **kw: None
+    b.reply = lambda text, buttons=None: None
+    seen = []
+
+    def fake(llms, text, routes, logger=None, history=None, prices=""):
+        seen.append([h["content"] for h in history])
+        return {"commands": [], "reply": "回答%d" % len(seen), "model": "m"}
+    monkeypatch.setattr(T, "nl_to_commands", fake)
+    b.handle("@bot 香港-东京 玩七天")
+    b.handle("@bot 樱花季呢")
+    assert seen[0] == []
+    assert seen[1] == ["香港-东京 玩七天", "回答1"]
+    for h in b.history[:2]:                         # 1 小时前的对话不再带
+        h["ts"] -= 7200
+    b.handle("@bot 第三句")
+    assert seen[2] == ["樱花季呢", "回答2"]

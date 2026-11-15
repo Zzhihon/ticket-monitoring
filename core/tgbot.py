@@ -43,24 +43,28 @@ _COMMANDS = [("price", "各航线最低价"), ("routes", "监控中的航线"),
              ("help", "指令说明")]
 _MUTATING = {"watch", "unwatch", "scan"}
 _READONLY = {"price", "routes", "help"}
-_NL_PROMPT = """你是机票监控 bot 的指令翻译器。把用户的话翻译成下列指令，只输出 JSON 对象：
-{"commands": ["/指令 参数", ...], "reply": "给用户的一句中文说明"}
-可用指令：
+_NL_PROMPT = """你是群里的机票助手，帮用户盯机票、查价、出主意。只输出 JSON 对象：
+{"commands": ["/指令 参数", ...], "reply": "给用户的中文回复"}
+可用指令（只在需要动作时给；纯聊天/答疑时 commands 留空）：
 /watch 出发三字码 到达三字码 去程YYYY-MM-DD [返程YYYY-MM-DD] [每人含税心理价数字]
 /unwatch 序号
 /price
 /routes
 /scan
 规则：
-- 今天是 {today}。相对日期按今天换算；日期说不清（如「12月下旬」没说哪天）就不要猜，commands 留空，在 reply 里问清楚。
-- 东京有成田 NRT 和羽田 HND 两个机场：用户没指定就各出一条 /watch。大阪用 KIX。其他城市用主机场三字码。
-- 「往返」「X 天」要换算出返程日期；只说单程就不带返程。
-- 心理价是人民币每人含税总价；用户没说就不写这一项。
-- 删除航线要用下面列表里的序号；对不上就不出指令，在 reply 里说明。
-- 和机票监控无关的话：commands 留空，reply 简短说明你能做什么。
-- reply 只说「将要做什么」，不要说已经完成：/watch /unwatch /scan 要用户点确认按钮后才执行。
+- 今天是 {today}。结合前面的对话理解用户的意思：省略的出发地、目的地、天数、预算沿用上文。
+- 出行常识（樱花季、节假日、淡旺季、签证、机场区别等）直接在 reply 里回答，简洁具体，不超过 200 字；不确定的说「通常」「以当年预报为准」。
+- 用户的时间说法模糊（「樱花季」「12月下旬」「明年春节」）：按常识选一组具体日期，在 reply 里说明为什么选这几天，同时给出对应 /watch——用户要点确认按钮才会执行，所以可以大胆提议。
+- 东京有成田 NRT 和羽田 HND：用户没指定就各出一条 /watch。大阪用 KIX。其他城市用主机场三字码。
+- 「往返」「玩 X 天」要换算出返程日期（玩 7 天=去程后第 7 天返程）；只说单程就不带返程。
+- 心理价是人民币每人含税总价；用户没说就不写。
+- 删除航线用下面列表里的序号；对不上就不出指令，在 reply 里说明。
+- 问价格、历史最低：只能根据下面「已采到的价格」回答，没有的数据直接说还没采到、开始监控后才会积累，不要编造价格。
+- 改动类指令（/watch /unwatch /scan）reply 里只说「将要做什么」，不要说已经完成。
 当前监控中的航线：
-{routes}"""
+{routes}
+已采到的价格：
+{prices}"""
 _DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _IATA = re.compile(r"^[A-Za-z]{3}$")
 
@@ -145,7 +149,8 @@ def chat_once(llm: dict, messages: list) -> str:
     return "".join(parts)
 
 
-def nl_to_commands(llms, text: str, routes: list, logger=None) -> dict:
+def nl_to_commands(llms, text: str, routes: list, logger=None,
+                   history: list = None, prices: str = "") -> dict:
     """一句话 → {"commands": [...], "reply": "..."}。llms 是一个或一串
     模型配置，按顺序试，前一个出错/超时/回的不是 JSON 就换下一个（免费
     模型在前、付费兜底在后）；全挂才抛。只认 / 开头且属于已知指令的
@@ -153,9 +158,12 @@ def nl_to_commands(llms, text: str, routes: list, logger=None) -> dict:
     listing = "\n".join("%d. %s" % (i, route_label(r))
                          for i, r in enumerate(routes, 1)) or "（无）"
     prompt = (_NL_PROMPT.replace("{today}", date.today().isoformat())
-              .replace("{routes}", listing))
-    messages = [{"role": "system", "content": prompt},
-                {"role": "user", "content": text}]
+              .replace("{routes}", listing)
+              .replace("{prices}", prices or "（还没有）"))
+    messages = ([{"role": "system", "content": prompt}]
+                + [{"role": h["role"], "content": h["content"]}
+                   for h in (history or [])]
+                + [{"role": "user", "content": text}])
     errs = []
     for llm in (llms if isinstance(llms, list) else [llms]):
         name = llm.get("model") or "deepseek-flash"
@@ -246,6 +254,8 @@ class TelegramBot(threading.Thread):
         self.llm = [x for x in llm if isinstance(x, dict) and x.get("api_key")] \
             or None
         self.pending = {}   # 确认按钮 id → 待执行指令（进程内，重启即作废）
+        # 群聊上下文：最近 1 小时、最多 12 轮（进程内，重启即清空）
+        self.history = []
         # 长轮询 50s：读超时要比它长；trust_env=False 直连律，代理只认显式 proxy
         self.http = httpx.Client(proxy=str(tg.get("proxy") or "").strip()
                                  or None, timeout=httpx.Timeout(65, connect=15),
@@ -352,9 +362,25 @@ class TelegramBot(threading.Thread):
     def ask(self, text: str):
         if not text:
             return
+        try:
+            # hy4 带上下文要十几到三十秒：先亮「正在输入」，免得以为没反应
+            self._call("sendChatAction", chat_id=self.chat_id, action="typing")
+        except Exception:
+            pass
         routes = self._me(self._users()).get("routes") or []
-        out = nl_to_commands(self.llm, text, routes, logger=self.logger)
+        now = time.time()
+        self.history = [h for h in self.history if now - h["ts"] < 3600][-24:]
+        prices = "\n".join(
+            ["近 24 小时："] + self.price_lines(routes)
+            + ["近 8 天（原始明细只留 8 天）："] + self.price_lines(routes, 24 * 8)
+        ) if routes else ""
+        out = nl_to_commands(self.llm, text, routes, logger=self.logger,
+                             history=self.history, prices=prices)
         cmds = out["commands"]
+        said = out["reply"] + ("\n（提议：%s）" % "；".join(cmds) if cmds else "")
+        self.history += [{"role": "user", "content": text, "ts": now},
+                         {"role": "assistant", "content": said or "（无回复）",
+                          "ts": now}]
         if out["reply"]:
             self.reply(out["reply"])
         todo = []
@@ -386,6 +412,11 @@ class TelegramBot(threading.Thread):
                              "已过期，请重新说一遍" if todo is None else "执行中"))
         except Exception:
             pass
+        if todo is not None:
+            self.history.append({"role": "user", "ts": time.time(),
+                                 "content": "（%s了：%s）" % (
+                                     "确认执行" if act == "ok" else "取消",
+                                     "；".join(todo))})
         if act == "ok" and todo:
             for c in todo:
                 self.handle(c)
@@ -424,24 +455,29 @@ class TelegramBot(threading.Thread):
         if not routes:
             self.reply("还没有航线，先 /watch 加一条")
             return
+        lines = self.price_lines(routes)
+        lines.append("价格=渠道含税总价%s；以原平台下单页为准" %
+                     ("（往返为往返总价）" if any(
+                         r.get("ret_dates") for r in routes) else ""))
+        self.reply("\n".join(lines))
+
+    def price_lines(self, routes: list, hours: int = 24) -> list:
+        """各航线各日期在 hours 小时内采到的最低价，一行一个日期组合。"""
         lines = []
         for i, r in enumerate(routes, 1):
             lines.append("%d. %s" % (i, route_label(r)))
-            for x in route_lows(self.db_path, r):
+            for x in route_lows(self.db_path, r, hours=hours):
                 tag = "%s%s" % (x["dep"], " 返 " + x["ret"] if x["ret"] else "")
                 row = x["row"]
                 if not row:
-                    lines.append("   %s：24 小时内还没有价格" % tag)
+                    lines.append("   %s：%d 小时内还没有价格" % (tag, hours))
                     continue
                 plat, price, fno, at = row
                 hit = (" ✅ 已到心理价" if r.get("alert_direct")
                        and price <= float(r["alert_direct"]) else "")
                 lines.append("   %s：￥%.0f %s %s（%s 采集）%s" % (
                     tag, price, plat, fno or "", str(at)[5:16], hit))
-        lines.append("价格=渠道含税总价%s；以原平台下单页为准" %
-                     ("（往返为往返总价）" if any(
-                         r.get("ret_dates") for r in routes) else ""))
-        self.reply("\n".join(lines))
+        return lines
 
     def cmd_watch(self, args):
         route = parse_watch(args)
