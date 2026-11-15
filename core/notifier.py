@@ -1763,27 +1763,47 @@ class TelegramNotifier(_HeartbeatBackoff):
                 out.append((alt, url))
         return out
 
+    @staticmethod
+    def _photo_ok(data: bytes) -> bool:
+        """sendPhoto 的尺寸限制：宽+高 ≤ 10000、长宽比 ≤ 20。航线多时
+        明细总表图会很高（20 航线实测 936×10216），超限只能当文件发。
+        读不出尺寸（非 PNG）按可发处理，由 Telegram 回执兜底。"""
+        if data[:8] != b"\x89PNG\r\n\x1a\n" or len(data) < 24:
+            return True
+        w, h = int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+        return w > 0 and h > 0 and w + h <= 10000 and max(w, h) / min(w, h) <= 20
+
     def _send_photo(self, alt: str, photo) -> bool:
-        url = "%s/bot%s/sendPhoto" % (self.api_base, self.bot_token)
-        try:
-            if isinstance(photo, bytes):
-                r = httpx.post(url, data={"chat_id": self.chat_id, "caption": alt[:200],
-                                          **({"message_thread_id": int(self.thread_id)}
-                                             if self.thread_id else {})},
-                               files={"photo": ("chart.png", photo, "image/png")},
-                               timeout=60, trust_env=False, proxy=self.proxy)
-            else:
-                r = httpx.post(url, json={"chat_id": self.chat_id, "photo": photo,
-                                          "caption": alt[:200],
-                                          **({"message_thread_id": int(self.thread_id)}
-                                             if self.thread_id else {})},
-                               timeout=60, trust_env=False, proxy=self.proxy)
-            if r.status_code == 200 and (r.json() or {}).get("ok"):
-                return True
-            self.logger.warning("[Telegram] 图片没发出去 %s: HTTP %s %s",
-                                alt, r.status_code, (r.text or "")[:120])
-        except Exception as e:
-            self.logger.warning("[Telegram] 图片没发出去 %s: %s", alt, e)
+        """图跟在文字后面发：能当照片的发照片（群里直接看），超尺寸的
+        发文件（点开是原图）。公网直链读不到尺寸，被拒后改文件重发。"""
+        extra = ({"message_thread_id": int(self.thread_id)} if self.thread_id else {})
+        as_doc = isinstance(photo, bytes) and not self._photo_ok(photo)
+        for attempt in range(2):
+            method, field = (("sendDocument", "document") if as_doc
+                             else ("sendPhoto", "photo"))
+            url = "%s/bot%s/%s" % (self.api_base, self.bot_token, method)
+            try:
+                if isinstance(photo, bytes):
+                    r = httpx.post(url, data={"chat_id": self.chat_id,
+                                              "caption": alt[:200], **extra},
+                                   files={field: ("%s.png" % (alt or "chart"),
+                                                  photo, "image/png")},
+                                   timeout=60, trust_env=False, proxy=self.proxy)
+                else:
+                    r = httpx.post(url, json={"chat_id": self.chat_id, field: photo,
+                                              "caption": alt[:200], **extra},
+                                   timeout=60, trust_env=False, proxy=self.proxy)
+                if r.status_code == 200 and (r.json() or {}).get("ok"):
+                    return True
+                if (not as_doc and attempt == 0
+                        and "DIMENSIONS" in (r.text or "").upper()):
+                    as_doc = True
+                    continue
+                self.logger.warning("[Telegram] 图片没发出去 %s: HTTP %s %s",
+                                    alt, r.status_code, (r.text or "")[:120])
+            except Exception as e:
+                self.logger.warning("[Telegram] 图片没发出去 %s: %s", alt, e)
+            return False
         return False
 
     def send(self, title: str, desp: str = "", at_mobiles: list = None,

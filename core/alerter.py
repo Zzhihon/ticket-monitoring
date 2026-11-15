@@ -2418,6 +2418,13 @@ class Alerter:
             desp = "#### ↩️ 已回落出线（本轮无达标班次）\n\n"
         else:
             desp = f"#### ❌ {n_r} 条航线{date_bit}全部未达标\n\n"
+        # 往返口径注：摘要行日期带「-回程日」的价格是渠道直出往返总价，
+        # 行内放不下「往返」二字（40 半角预算），口径在头部说一次
+        _rt_routes = [r for r, _ in rs_list if getattr(r, "ret_dates", None)]
+        if _rt_routes:
+            desp += ("> 价格为每人含税往返总价\n\n"
+                     if len(_rt_routes) == len(rs_list)
+                     else "> 日期带「-回程日」的是每人含税往返总价\n\n")
         # 头部一行（手机引用行 ~20 全角字符宽，超宽钉钉会折行且断点
         # 不受控——实测「🟩 与其后文字被拆两行」）：短格式时刻（HH:MM）
         # + 半角空格分隔。日期不进图例（标题/小节已有）——带 M/D 时
@@ -2460,13 +2467,28 @@ class Alerter:
             # slim（默认推荐）与 auto 降级后走轻量摘要行
             if slim and not hits and not fell:
                 dw = dep_win_txt(route.dep_time_min, route.dep_time_max)
+                # 国际航线用三字码：中文名（「中国香港→东京成田」）一行放
+                # 不下会被截名档截成「东京」，成田/羽田两条读成同一条
+                from core.intl import INTL_CITY_NAME
+                # 只认国际城市字典里有的码（未知码也会被 is_intl_route /
+                # is_intl_city 判成国际，那是「不认识」不是「国际」）
+                od = (f"{route.from_code}→{route.to_code}"
+                      if (route.from_code in INTL_CITY_NAME
+                          or route.to_code in INTL_CITY_NAME)
+                      else f"{route.from_name}→{route.to_name}")
                 # dep_win_txt 自带全角括号形态（「（19:00后出发）」），
                 # 直接拼接不再包一层（双括号实发 15:27 心跳实锤）
-                head = (f"{route.from_name}→{route.to_name}{dw}"
-                        if dw else
-                        f"{route.from_name}→{route.to_name}")
+                head = f"{od}{dw}" if dw else od
+                rets = list(getattr(route, "ret_dates", None) or [])
                 for s in sections:
                     d_short = self._date_short(s["date"])
+                    if rets:
+                        # 往返：日期写成「去-回」（同月回程只写日），口径
+                        # 「往返总价」在正文头部说一次（见下方 _rt_routes）
+                        rd = self._date_short(rets[0]) if len(rets) == 1 else ""
+                        if rd[:2] == d_short[:2]:
+                            rd = rd[3:]
+                        d_short += f"-{rd}" if rd else ""
                     bd = s.get("best_direct")
                     bt = (s.get("best_transfer_mkt")
                           or s.get("best_transfer"))

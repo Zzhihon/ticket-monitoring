@@ -33,3 +33,28 @@ def test_ctrip_round_trip_without_return_flight_uses_back_date():
 def test_one_way_line_unchanged():
     line = Alerter._fmt_flight_line(dict(BASE), idx=1)
     assert "往返" not in line and line.startswith("1. ￥3100 ")
+
+
+
+def test_digest_line_intl_codes_and_round_trip_span(tmp_path, monkeypatch):
+    """心跳摘要行：国际航线用三字码（中文名一行放不下会被截成「东京」，
+    成田/羽田读成同一条）；往返日期写「去-回」（同月回程只写日），
+    口径「往返总价」在正文头部说一次。"""
+    import logging
+    from core.models import Route
+    from tests.test_alert_path import _fp, _ps
+    monkeypatch.chdir(tmp_path)
+    a = Alerter(logging.getLogger("t"), notifier=None, storage=None, digest=True,
+                at_mobile="", storm_repeat=1, user="hzh")
+    built = []
+    for to, to_name in (("NRT", "东京成田"), ("HND", "东京羽田")):
+        r = Route(from_code="HKG", from_name="中国香港", to_code=to, to_name=to_name,
+                  dates=["2027-03-01"], ret_dates=["2027-03-08"],
+                  alert_direct=1000, alert_transfer=0)
+        p = _ps([_fp(1729, "香港快运UO628", "19:55", "00:45", cross="+1天",
+                     plat="tongcheng", dep="2027-03-01")], "HKG", to, "2027-03-01")
+        built.append((r, a._build_sections(r, p)))
+    d = a._digest_payload(built, fresh=True, with_tables=False, with_charts=False)["desp"]
+    assert "> 价格为每人含税往返总价" in d, d
+    assert "> HKG→NRT 03/01-08 ｜ 直飞 ￥1729" in d, d
+    assert "> HKG→HND 03/01-08 ｜ 直飞 ￥1729" in d, d

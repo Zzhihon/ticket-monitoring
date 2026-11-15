@@ -110,3 +110,38 @@ def test_photo_failure_does_not_fail_push(monkeypatch):
     tg, calls = _mk(monkeypatch, [(200, {"ok": True}), (400, {"ok": False})])
     assert tg.send("x", "![图](https://img.example/b.png)") is True
     assert tg._fail_streak == 0 and len(calls) == 2
+
+
+def _png(w, h):
+    return (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR"
+            + w.to_bytes(4, "big") + h.to_bytes(4, "big") + b"rest")
+
+
+def test_tall_chart_goes_as_document(monkeypatch, tmp_path):
+    import report
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "data").mkdir()
+    png = tmp_path / "data" / "flights_table_hzh_ALL.png"
+    png.write_bytes(_png(936, 10216))          # 20 航线实测尺寸
+    url = report.upload_chart(str(png), None, LOG, ih={"provider": "local"})
+    tg, calls = _mk(monkeypatch, [(200, {"ok": True}), (200, {"ok": True})])
+    assert tg.send("心跳", "![明细总表](%s)" % url) is True
+    assert calls[1][0].endswith("/sendDocument")
+    assert "document" in calls[1][1]["files"]
+
+
+def test_normal_chart_stays_photo():
+    assert N.TelegramNotifier._photo_ok(_png(936, 1400)) is True
+    assert N.TelegramNotifier._photo_ok(_png(936, 10216)) is False
+    assert N.TelegramNotifier._photo_ok(_png(200, 4100)) is False   # 比例 > 20
+
+
+def test_remote_photo_rejected_for_size_retries_as_document(monkeypatch):
+    tg, calls = _mk(monkeypatch, [
+        (200, {"ok": True}),
+        (400, {"ok": False, "description": "Bad Request: PHOTO_INVALID_DIMENSIONS"}),
+        (200, {"ok": True})])
+    assert tg.send("x", "![图](https://img.example/tall.png)") is True
+    assert [c[0].rsplit("/", 1)[1] for c in calls] == [
+        "sendMessage", "sendPhoto", "sendDocument"]
+    assert calls[2][1]["json"]["document"] == "https://img.example/tall.png"
