@@ -307,6 +307,9 @@ class TelegramBot(threading.Thread):
             try:
                 ups = self._call("getUpdates", offset=offset, timeout=50,
                                  allowed_updates=["message", "callback_query"])
+            except httpx.TimeoutException:
+                # 长轮询经隧道偶尔读超时：不是故障，立刻再拉，别让新消息多等 30 秒
+                continue
             except Exception as e:
                 self.logger.warning("[TG指令] 拉取失败，30 秒后重试: %s", e)
                 time.sleep(30)
