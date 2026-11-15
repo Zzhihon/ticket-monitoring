@@ -854,7 +854,18 @@ def render_flights_table(rows, title, out_path="data/flights_table.png",
             _dac = str(f.get("depAirportCode") or "").strip()
             _aac = str(f.get("arrAirportCode") or "").strip()
             _apt = f"{_dac}→{_aac}" if (_dac and _aac) else ""
+            # 往返标记（价格=往返总价，只看去程时刻会读成单程价）：排在
+            # 次行最前，超宽丢词时最后才轮到它；回程航班/日期有就带
+            _rt = ""
+            if str(f.get("tripType") or "").upper() == "RT":
+                _rd = re.sub(r"\D", "", str(f.get("returnDate")
+                                             or f.get("backDate") or ""))
+                _rt = " ".join(x for x in (
+                    "往返总价", ("回" + str(f.get("returnFlight") or "").strip()
+                              if f.get("returnFlight") else ""),
+                    (f"{_rd[4:6]}/{_rd[6:]}" if len(_rd) == 8 else "")) if x)
             return [(k, t) for k, t in (
+                ("trip", _rt),
                 ("plane", (f.get("plane") or "").strip()),
                 ("planeSize", (f.get("planeSize") or "").strip()),
                 # 机场码辨识槽（上方 _apt 注）：紧随机型（行辨识信息

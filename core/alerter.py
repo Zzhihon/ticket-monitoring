@@ -3479,7 +3479,20 @@ class Alerter:
         # （十九§2 守卫离位族），float 价直达曾产「￥12345.0」且
         # bare 地板档 42/40 超预算
         px = f"**￥{f['price']:.0f}**" if mark else f"￥{f['price']:.0f}"
-        full = (f"{no}{px} {f['name']}{_seg}{trans}（{plat_full}）")
+        # 往返行：price 是渠道直出的往返总价（INTL_DESIGN §2.6），只写去程
+        # 航班与时刻会被读成单程价——「往返」贴价格走（骨架/地板档都带
+        # px，辨识恒保），回程航班+日期只进完整档，超宽时最先让位
+        ret = ""
+        if str(f.get("tripType") or "").upper() == "RT":
+            px += "往返"
+            rf = str(f.get("returnFlight") or "").strip()
+            rd = re.sub(r"\D", "", str(f.get("returnDate") or f.get("backDate") or ""))
+            if rf or len(rd) == 8:
+                ret = " 回" + " ".join(x for x in (
+                    rf, f"{rd[4:6]}/{rd[6:]}" if len(rd) == 8 else "") if x)
+        full = (f"{no}{px} {f['name']}{_seg}{ret}{trans}（{plat_full}）")
+        if ret and _disp_dw(full) > 40:
+            full = full.replace(ret, "", 1)
         # TOP3 明细行同受 20 全角铁律约束（全链唯一无守卫的行：中转+经
         # 停+全程时长+角标曾轻松超宽，手机断点失控）：超宽依次丢全程
         # 时长→税前/补位角标→当日达；经X 随骨架档走（城市辨识不先于

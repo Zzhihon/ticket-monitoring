@@ -470,7 +470,8 @@ class TelegramBot(threading.Thread):
         for i, r in enumerate(routes, 1):
             lines.append("%d. %s" % (i, route_label(r)))
             for x in route_lows(self.db_path, r, hours=hours):
-                tag = "%s%s" % (x["dep"], " 返 " + x["ret"] if x["ret"] else "")
+                tag = ("%s→%s 往返" % (x["dep"], x["ret"]) if x["ret"]
+                       else "%s 单程" % x["dep"])
                 row = x["row"]
                 if not row:
                     lines.append("   %s：%d 小时内还没有价格" % (tag, hours))
